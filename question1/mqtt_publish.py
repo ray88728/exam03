@@ -6,8 +6,14 @@ import serial
 
 import locale
 
+import threading
+
 mqttc = paho.Client()
 
+def job():
+    while 1:
+        s.write("/getAcc/run\r".encode())
+        time.sleep(0.1)
 
 # Settings for connection
 
@@ -132,18 +138,24 @@ time.sleep(0.5)
 s.write("/getAcc/run\r".encode())
 time.sleep(0.5)
 line=s.read(1)
-
+thread_get = threading.Thread(target = job)
+thread_get.start()
+number=0
 while(1):
 
-    s.write("/getAcc/run\r".encode())
+    line=s.read(6)
 
-    line=s.readline()
+    x=line.decode()
 
-    x=int(line)
+    x=locale.atof(x)
 
     mqttc.publish(topic, x)
 
     print(x)
+
+    print(number)
+
+    number=number+1
 
     mqttc.loop()
     

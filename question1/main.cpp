@@ -346,6 +346,6 @@ void check_addr(char *xbee_reply, char *messenger){
 
 void getAcc(Arguments *in, Reply *out) {
 
-    xbee.printf("%d\r\n", int(horizontal_velocity));
+    xbee.printf("%l.4f", horizontal_velocity);
    // redLED=0;
 }
