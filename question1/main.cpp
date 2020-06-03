@@ -4,6 +4,8 @@
 
 #include "fsl_gpio.h"
 
+#include "mbed_rpc.h"
+
 #define UINT14_MAX        16383
 
 // FXOS8700CQ I2C address
@@ -45,89 +47,202 @@
 #define FXOS8700Q_WHOAMI_VAL 0xC7
 
 
-I2C i2c( PTD9,PTD8);
 
-Serial pc(USBTX, USBRX);
 
-Timer for_debounce;
 
-Ticker ledTicker;
+volatile int message_num = 0;
 
-Ticker vectorTicker;
+volatile int arrivedcount = 0;
 
-EventQueue eventQueue;
+volatile bool closed = false;
 
-EventQueue readQueue;
+int horizontal_velocity =0;
 
-Thread Thread1;
+int change=0;
 
-Thread Thread2; 
+const char* topic = "Mbed";
 
-int m_addr = FXOS8700CQ_SLAVE_ADDR1;
+int tilt =0;
 
-uint8_t who_am_i, data[2], res[6];
-
-int16_t acc16;
+int sample_time=0;
 
 float t[3];
 
-float X[100];
+int sum_data =0;
 
-float Y[100];
+char temp[100];
 
-float Z[100];
+I2C i2c( PTD9,PTD8);
 
-int i,j;
+int fast =0;
 
-int tilt[100];
-
-float stationary_x;
-
-float stationary_y;
-
-float stationary_z;
-
-int horizontal_velocity =0;
+int m_addr = FXOS8700CQ_SLAVE_ADDR1;
 
 void FXOS8700CQ_readRegs(int addr, uint8_t * data, int len);
 
 void FXOS8700CQ_writeRegs(uint8_t * data, int len);
 
-void read_vector(void);
+void getAcc(Arguments *in, Reply *out);
 
-void log_vector(void);
+Thread mqtt_thread;
 
-void blink_led1(void);
+EventQueue mqtt_queue;
 
-void logger(void);
+RPCFunction rpcAcc(&getAcc, "getAcc");
+
+RawSerial pc(USBTX, USBRX);
+
+RawSerial xbee(D12, D11);
+
+
+EventQueue queue(32 * EVENTS_EVENT_SIZE);
+
+DigitalOut redLED(LED1);
+
+Thread thr;
+
+void xbee_rx_interrupt(void);
+
+void xbee_rx(void);
+
+void reply_messange(char *xbee_reply, char *messange);
+
+void check_addr(char *xbee_reply, char *messenger);
+
+
 
 int main() {
-   EventQueue queue;
 
-   Thread1.start(callback(&eventQueue, &EventQueue::dispatch_forever));
 
-   Thread2.start(callback(&readQueue, &EventQueue::dispatch_forever));
+      char xbee_reply[4];
 
-   pc.baud(115200);
+   //   btn2.rise(mqtt_queue.event(&publish_message, &client));
 
-   // Enable the FXOS8700Q
 
-   FXOS8700CQ_readRegs( FXOS8700Q_CTRL_REG1, &data[1], 1);
+//      printf("1\n");
 
-   data[1] |= 0x01;
+      int num = 0;
+      
+      pc.baud(9600);
 
-   data[0] = FXOS8700Q_CTRL_REG1;
+      xbee.baud(9600);
 
-   FXOS8700CQ_writeRegs(data, 2);
+      xbee.printf("+++");
 
-   // Get the slave address
+      xbee_reply[0] = xbee.getc();
 
-   FXOS8700CQ_readRegs(FXOS8700Q_WHOAMI, &who_am_i, 1);
+      xbee_reply[1] = xbee.getc();
 
-   readQueue.call_every(100,read_vector)    ;
+      if(xbee_reply[0] == 'O' && xbee_reply[1] == 'K'){
+
+         pc.printf("enter AT mode.\r\n");
+
+         xbee_reply[0] = '\0';
+
+         xbee_reply[1] = '\0';
+
+      }
+
+      xbee.printf("ATMY 0x240\r\n");
+
+      reply_messange(xbee_reply, "setting MY : 0x240");
+
+      xbee.printf("ATDL 0x0\r\n");
+
+      reply_messange(xbee_reply, "setting DL : 0x0");
+
+      xbee.printf("ATID 0x4041\r\n");
+
+      reply_messange(xbee_reply, "setting PAN ID : 0x4041");
+
+      xbee.printf("ATWR\r\n");
+
+      reply_messange(xbee_reply, "write config");
+
+      //xbee.printf("ATMY\r\n");
+
+    //  check_addr(xbee_reply, "MY");
+
+  //    xbee.printf("ATDL\r\n");
+
+//      check_addr(xbee_reply, "DL");
+
+      xbee.printf("ATCN\r\n");
+
+      reply_messange(xbee_reply, "exit AT mode");
+
+      xbee.getc();
+
+
+      // start
+
+
+      // Setup a serial interrupt function of receiving data from xbee
+
+ 
+
+
+
+      uint8_t who_am_i, dataa[2], res[6];
+
+      int16_t acc16;  
+
+      FXOS8700CQ_readRegs( FXOS8700Q_CTRL_REG1, &dataa[1], 1);
+
+      dataa[1] |= 0x01;
+
+      dataa[0] = FXOS8700Q_CTRL_REG1;
+
+      FXOS8700CQ_writeRegs(dataa, 2);
+
+      // Get the slave address
+
+      FXOS8700CQ_readRegs(FXOS8700Q_WHOAMI, &who_am_i, 1);
+
+      mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
+
+      thr.start(callback(&queue, &EventQueue::dispatch_forever));
+
+    //  xbee.attach(xbee_rx_interrupt, Serial::RxIrq);   
+      queue.call(&xbee_rx);
+
+      while (1) {
+
+         FXOS8700CQ_readRegs(FXOS8700Q_OUT_X_MSB, res, 6);
+
+         acc16 = (res[0] << 6) | (res[1] >> 2);
+
+         if (acc16 > UINT14_MAX/2)
+
+            acc16 -= UINT14_MAX;
+
+         t[0] = ((float)acc16) / 4096.0f;
+
+         acc16 = (res[2] << 6) | (res[3] >> 2);
+
+         if (acc16 > UINT14_MAX/2)
+
+            acc16 -= UINT14_MAX;
+
+         t[1] = ((float)acc16) / 4096.0f;
+
+
+         acc16 = (res[4] << 6) | (res[5] >> 2);
+
+         if (acc16 > UINT14_MAX/2)
+
+            acc16 -= UINT14_MAX;
+
+         t[2] = ((float)acc16) / 4096.0f;
+
+         horizontal_velocity = horizontal_velocity + sqrt(t[0]*t[0]+t[1]*t[1])*0.1*9.8;
+
+
+      }
+
+      return 0;
 
 }
-
 
 void FXOS8700CQ_readRegs(int addr, uint8_t * data, int len) {
 
@@ -146,36 +261,92 @@ void FXOS8700CQ_writeRegs(uint8_t * data, int len) {
 
 }
 
-void read_vector(){
-        
-        FXOS8700CQ_readRegs(FXOS8700Q_OUT_X_MSB, res, 6);
 
-        acc16 = (res[0] << 6) | (res[1] >> 2);
+void xbee_rx_interrupt(void)
 
-        if (acc16 > UINT14_MAX/2)
+{
 
-            acc16 -= UINT14_MAX;
+  xbee.attach(NULL, Serial::RxIrq); // detach interrupt
 
-        t[0] = ((float)acc16) / 4096.0f;
+  queue.call(&xbee_rx);
 
-
-        acc16 = (res[2] << 6) | (res[3] >> 2);
-
-        if (acc16 > UINT14_MAX/2)
-
-            acc16 -= UINT14_MAX;
-
-        t[1] = ((float)acc16) / 4096.0f;
+}
 
 
-        acc16 = (res[4] << 6) | (res[5] >> 2);
+void xbee_rx(void)
 
-        if (acc16 > UINT14_MAX/2)
+{
+while(1){
+  char buf[30] = {0};
+  char outbuf[30] = {0};
+  while(xbee.readable()){
+    for (int i=0; ; i++) {
+      char recv = xbee.getc();
+      if (recv == '\r') {
+        break;
+      }
+      buf[i] = pc.putc(recv);
+    }
+    //fast =1;
+    RPC::call(buf, outbuf);
+    //pc.printf("%s\r\n", outbuf);
+    //fast =0;
+    wait(0.00005);
+  }
+}
+//redLED=1;
+//  xbee.attach(xbee_rx_interrupt, Serial::RxIrq); // reattach interrupt
 
-            acc16 -= UINT14_MAX;
+}
 
-        t[2] = ((float)acc16) / 4096.0f;
 
-        horizontal_velocity=horizontal_velocity+sqrt(t[0]*t[0]+t[1]*t[1])*0.1;
-        pc.printf("%l.4f\r\n",horizontal_velocity);
+void reply_messange(char *xbee_reply, char *messange){
+
+  xbee_reply[0] = xbee.getc();
+
+  xbee_reply[1] = xbee.getc();
+
+  xbee_reply[2] = xbee.getc();
+
+  if(xbee_reply[1] == 'O' && xbee_reply[2] == 'K'){
+
+    pc.printf("%s\r\n", messange);
+
+    xbee_reply[0] = '\0';
+
+    xbee_reply[1] = '\0';
+
+    xbee_reply[2] = '\0';
+
+  }
+
+}
+
+
+void check_addr(char *xbee_reply, char *messenger){
+
+  xbee_reply[0] = xbee.getc();
+
+  xbee_reply[1] = xbee.getc();
+
+  xbee_reply[2] = xbee.getc();
+
+  xbee_reply[3] = xbee.getc();
+
+  pc.printf("%s = %c%c%c\r\n", messenger, xbee_reply[1], xbee_reply[2], xbee_reply[3]);
+
+  xbee_reply[0] = '\0';
+
+  xbee_reply[1] = '\0';
+
+  xbee_reply[2] = '\0';
+
+  xbee_reply[3] = '\0';
+
+}
+
+void getAcc(Arguments *in, Reply *out) {
+
+    xbee.printf("%l.4f\r\n", horizontal_velocity);
+   // redLED=0;
 }
