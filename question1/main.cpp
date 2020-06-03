@@ -97,8 +97,6 @@ RawSerial xbee(D12, D11);
 
 EventQueue queue(32 * EVENTS_EVENT_SIZE);
 
-DigitalOut redLED(LED1);
-
 Thread thr;
 
 void xbee_rx_interrupt(void);
@@ -199,7 +197,6 @@ int main() {
 
       FXOS8700CQ_readRegs(FXOS8700Q_WHOAMI, &who_am_i, 1);
 
-      mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
 
       thr.start(callback(&queue, &EventQueue::dispatch_forever));
 
@@ -236,6 +233,7 @@ int main() {
          t[2] = ((float)acc16) / 4096.0f;
 
          horizontal_velocity = horizontal_velocity + sqrt(t[0]*t[0]+t[1]*t[1])*0.1*9.8;
+         wait(0.1);
 
 
       }
@@ -276,7 +274,7 @@ void xbee_rx_interrupt(void)
 void xbee_rx(void)
 
 {
-while(1){
+
   char buf[30] = {0};
   char outbuf[30] = {0};
   while(xbee.readable()){
@@ -293,7 +291,8 @@ while(1){
     //fast =0;
     wait(0.00005);
   }
-}
+   xbee.attach(xbee_rx_interrupt, Serial::RxIrq); // reattach interrupt
+
 //redLED=1;
 //  xbee.attach(xbee_rx_interrupt, Serial::RxIrq); // reattach interrupt
 
@@ -347,6 +346,6 @@ void check_addr(char *xbee_reply, char *messenger){
 
 void getAcc(Arguments *in, Reply *out) {
 
-    xbee.printf("%l.4f\r\n", horizontal_velocity);
+    xbee.printf("%d\r\n", int(horizontal_velocity));
    // redLED=0;
 }
